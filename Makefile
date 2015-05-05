@@ -4,5 +4,8 @@ generate_AdecError: generate_AdecError.cpp
 AdecError.h: generate_AdecError
 	./$< > $@
 
+adec: adec.cpp AdecError.h
+	g++ `libpng-config --cppflags --ldflags` -O2 $< -o $@
+
 clean:
 	rm -f generate_AdecError

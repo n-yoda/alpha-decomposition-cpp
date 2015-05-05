@@ -1,5 +1,4 @@
 #include <iostream>
-#include <fstream>
 #include <sstream>
 #include <ginac/ginac.h>
 #include <ginac/archive.h>
@@ -23,7 +22,7 @@ TA iseabc(const Color<TRGB, TA>& a, const Color<TRGB, TA>& b)
 {
     TRGB aRgbError = a.alpha * a.rgb - b.alpha * b.rgb;
     TA aError = a.alpha - b.alpha;
-    return aRgbError * (aRgbError - aError);
+    return aRgbError * (aRgbError - aError) + (aError * aError) / 3;
 }
 
 template<typename TRGB, typename TA>
@@ -137,6 +136,17 @@ ex partial2(const ex& src, const lst& restArgs, const string& tempName, vector<p
     return result;
 }
 
+lst concat(lst a, lst b)
+{
+    lst::const_iterator i;
+    lst c;
+    for (i = a.begin(); i != a.end(); ++i)
+        c.append(*i);
+    for (i = b.begin(); i != b.end(); ++i)
+        c.append(*i);
+    return c;
+}
+
 int main()
 {
     // Variables
@@ -160,48 +170,32 @@ int main()
         u, v;
 
     // Generate function
-    ex uvError;
-    ifstream inf("error.ginac");
-    if (!inf.is_open())
-    {
-        Color<ex, ex> s = bilinear(s0, s1, s2, s3, ex(u), ex(v));
-        Color<ex, ex> f = bilinear(f0, f1, f2, f3, ex(u), ex(v));
-        Color<ex, ex> b = bilinear(b0, b1, b2, b3, ex(u), ex(v));
-        ex error = iseabc(s, alphaBlend(f, b));
-        ex uError = integral(u, 0, 1, error).eval_integ();
-        uvError = integral(v, 0, 1, uError).eval_integ();
-        ofstream of("error.ginac");
-        of << archive(uvError);
-        of.close();
-    }
-    else
-    {
-        archive arch;
-        inf >> arch;
-        uvError = arch.unarchive_ex(syms);
-        inf.close();
-    }
+    Color<ex, ex> s = bilinear(s0, s1, s2, s3, ex(u), ex(v));
+    Color<ex, ex> f = bilinear(f0, f1, f2, f3, ex(u), ex(v));
+    Color<ex, ex> b = bilinear(b0, b1, b2, b3, ex(u), ex(v));
+    ex error = iseabc(s, alphaBlend(f, b));
+    ex uError = integral(u, 0, 1, error).eval_integ();
+    ex uvError = integral(v, 0, 1, uError).eval_integ();
 
     // Partial apply
     typedef vector<pair<symbol, ex>>::const_iterator vec_iter;
-    lst l0;
-    l0 =  s0.rgbSymbol, s0.alphaSymbol,
-        s1.rgbSymbol, s1.alphaSymbol,
-        s2.rgbSymbol, s2.alphaSymbol,
-        s3.rgbSymbol, s3.alphaSymbol,
-        f0.rgbSymbol, f0.alphaSymbol,
-        f1.rgbSymbol, f1.alphaSymbol,
-        f2.rgbSymbol, f2.alphaSymbol,
-        b0.rgbSymbol, b0.alphaSymbol,
-        b1.rgbSymbol, b1.alphaSymbol,
-        b2.rgbSymbol, b2.alphaSymbol;
-    lst l1(f3.alphaSymbol, b3.alphaSymbol);
-    lst l2(f3.rgbSymbol,  b3.rgbSymbol);
-    lst l12(f3.alphaSymbol, b3.alphaSymbol, f3.rgbSymbol,  b3.rgbSymbol);
+    lst l0, l1, l2, l3;
+    l0 = s0.alphaSymbol, s1.alphaSymbol, s2.alphaSymbol, s3.alphaSymbol,
+        f0.alphaSymbol, f1.alphaSymbol, f2.alphaSymbol,
+        b0.alphaSymbol, b1.alphaSymbol, b2.alphaSymbol;
+    l1 = s0.rgbSymbol, s1.rgbSymbol, s2.rgbSymbol, s3.rgbSymbol,
+        f0.rgbSymbol, f1.rgbSymbol, f2.rgbSymbol,
+        b0.rgbSymbol, b1.rgbSymbol, b2.rgbSymbol;
+    l2 = f3.alphaSymbol, b3.alphaSymbol;
+    l3 = f3.rgbSymbol,  b3.rgbSymbol;
 
-    vector<pair<symbol, ex>> temps0, temps1, result;
-    ex part0 = partial2(uvError, l12, "temp0_", temps0);
-    ex part1 = partial2(part0, l2, "temp1_", temps1);
+    lst l23, l123;
+    l23 = concat(l2, l3);
+    l123 = concat(l1, l23);
+    vector<pair<symbol, ex>> temp0, temp1, temp2;
+    ex part0 = partial(uvError, l0, "temp0_", temp0);
+    ex part1 = partial2(part0, l23, "temp1_", temp1);
+    ex part2 = partial2(part1, l3, "temp2_", temp2);
 
     // Print class
     string tab = "    ";
@@ -218,36 +212,55 @@ int main()
     for (lst::const_iterator i = l1.begin(); i != l1.end(); ++i)
         cout << tab << "double " << (*i) << ";" << endl;
 
-    cout << tab << "// Needed for result" << endl;
+    cout << tab << "// Needed for calcTemp2" << endl;
     for (lst::const_iterator i = l2.begin(); i != l2.end(); ++i)
+        cout << tab << "double " << (*i) << ";" << endl;
+
+    cout << tab << "// Needed for result" << endl;
+    for (lst::const_iterator i = l3.begin(); i != l3.end(); ++i)
         cout << tab << "double " << (*i) << ";" << endl;
 
     cout << endl;
 
     cout << tab << "void calcTemp0 ()" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temps0.begin(); i != temps0.end(); ++i)
+    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
         cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
+    cout << tab << "}" << endl << endl;
+
+    cout << tab << "void copyTemp0 (AdecError& x)" << endl;
+    cout << tab << "{" << endl;
+    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
+        cout << tab << tab << i->first.get_name() << " = x." << i->first.get_name() << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << tab << "void calcTemp1 ()" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temps1.begin(); i != temps1.end(); ++i)
+    for (vec_iter i = temp1.begin(); i != temp1.end(); ++i)
+        cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
+    cout << tab << "}" << endl << endl;
+
+    cout << tab << "void calcTemp2 ()" << endl;
+    cout << tab << "{" << endl;
+    for (vec_iter i = temp2.begin(); i != temp2.end(); ++i)
         cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << tab << "double calcResult ()" << endl;
     cout << tab << "{" << endl;
-    cout << tab << tab << "return " << part1 << ";" << endl;
+    cout << tab << tab << "return " << part2 << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << endl;
     cout << "private:" << endl;
 
-    for (vec_iter i = temps0.begin(); i != temps0.end(); ++i)
+    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
         cout << tab << "double " << i->first.get_name() << ";" << endl;
 
-    for (vec_iter i = temps1.begin(); i != temps1.end(); ++i)
+    for (vec_iter i = temp1.begin(); i != temp1.end(); ++i)
+        cout << tab << "double " << i->first.get_name() << ";" << endl;
+
+    for (vec_iter i = temp2.begin(); i != temp2.end(); ++i)
         cout << tab << "double " << i->first.get_name() << ";" << endl;
 
     cout << "};" << endl;
