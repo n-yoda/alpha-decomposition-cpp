@@ -2,6 +2,7 @@
 #include <sstream>
 #include <ginac/ginac.h>
 #include <ginac/archive.h>
+#include <regex>
 
 using namespace std;
 using namespace GiNaC;
@@ -55,20 +56,6 @@ Color<TRGB, TA> alphaBlend(
     blend.rgb = aRgb / blend.alpha;
     return blend;
 }
-
-struct ExColor1 : public Color<ex, ex>
-{
-public:
-    symbol rgbSymbol;
-    symbol alphaSymbol;
-    ExColor1(const string& name) :
-        rgbSymbol(string("C_").append(name)),
-        alphaSymbol(string("A_").append(name)),
-        Color() {
-            rgb = ex(rgbSymbol);
-            alpha = ex(alphaSymbol);
-        }
-};
 
 ex partial(const ex& src, const lst& applyArgs, const string& tempName, vector<pair<symbol, ex>>& temps)
 {
@@ -136,6 +123,14 @@ ex partial2(const ex& src, const lst& restArgs, const string& tempName, vector<p
     return result;
 }
 
+string csrc_long(ex e)
+{
+    ostringstream ss;
+    ss << e;
+    regex re("([a-zA-Z0-9_]+)\\^2");
+    return regex_replace(ss.str(), re, "($1*$1)");
+}
+
 lst concat(lst a, lst b)
 {
     lst::const_iterator i;
@@ -147,27 +142,39 @@ lst concat(lst a, lst b)
     return c;
 }
 
+struct ExColor1 : public Color<ex, ex>
+{
+public:
+    const symbol rgbSymbol;
+    const symbol alphaSymbol;
+    const int max;
+    ExColor1(const string& name, int mx) :
+        Color(),
+        rgbSymbol(string("C_").append(name)),
+        alphaSymbol(string("A_").append(name)),
+        max(mx) {
+            rgb = ex(rgbSymbol) / mx;
+            alpha = ex(alphaSymbol) / mx;
+        }
+    void appendMaxSubs(lst& l)
+    {
+        l.append(rgbSymbol == max);
+        l.append(alphaSymbol == max);
+    }
+};
+
 int main()
 {
     // Variables
-    ExColor1 s0("s0"), s1("s1"), s2("s2"), s3("s3");
-    ExColor1 f0("f0"), f1("f1"), f2("f2"), f3("f3");
-    ExColor1 b0("b0"), b1("b1"), b2("b2"), b3("b3");
+    ExColor1 s0("s0", 255), s1("s1", 255), s2("s2", 255), s3("s3", 255);
+    ExColor1 f0("f0", 15), f1("f1", 15), f2("f2", 15), f3("f3", 15);
+    ExColor1 b0("b0", 15), b1("b1", 15), b2("b2", 15), b3("b3", 15);
     symbol u("u"), v("v");
-    lst syms;
-    syms = s0.rgbSymbol, s0.alphaSymbol,
-        s1.rgbSymbol, s1.alphaSymbol,
-        s2.rgbSymbol, s2.alphaSymbol,
-        s3.rgbSymbol, s3.alphaSymbol,
-        f0.rgbSymbol, f0.alphaSymbol,
-        f1.rgbSymbol, f1.alphaSymbol,
-        f2.rgbSymbol, f2.alphaSymbol,
-        f3.rgbSymbol, f3.alphaSymbol,
-        b0.rgbSymbol, b0.alphaSymbol,
-        b1.rgbSymbol, b1.alphaSymbol,
-        b2.rgbSymbol, b2.alphaSymbol,
-        b3.rgbSymbol, b3.alphaSymbol,
-        u, v;
+    vector<ExColor1> colors = {
+        s0, s1, s2, s3,
+        f0, f1, f2, f3,
+        b0, b1, b2, b3,
+    };
 
     // Generate function
     Color<ex, ex> s = bilinear(s0, s1, s2, s3, ex(u), ex(v));
@@ -176,6 +183,7 @@ int main()
     ex error = iseabc(s, alphaBlend(f, b));
     ex uError = integral(u, 0, 1, error).eval_integ();
     ex uvError = integral(v, 0, 1, uError).eval_integ();
+    ex uvError2 = uvError * uvError.denom();
 
     // Partial apply
     typedef vector<pair<symbol, ex>>::const_iterator vec_iter;
@@ -193,75 +201,78 @@ int main()
     l23 = concat(l2, l3);
     l123 = concat(l1, l23);
     vector<pair<symbol, ex>> temp0, temp1, temp2;
-    ex part0 = partial(uvError, l0, "temp0_", temp0);
+    ex part0 = partial(uvError2, l0, "temp0_", temp0);
     ex part1 = partial2(part0, l23, "temp1_", temp1);
     ex part2 = partial2(part1, l3, "temp2_", temp2);
 
     // Print class
     string tab = "    ";
-    cout << csrc_double;
     cout << "class AdecError" << endl;
     cout << "{" << endl;
     cout << "public:" << endl;
 
+    string inputType = "long";
+
     cout << tab << "// Needed for calcTemp0" << endl;
-    for (lst::const_iterator i = l0.begin(); i != l0.end(); ++i)
-        cout << tab << "double " << (*i) << ";" << endl;
+    for (const auto & i : l0)
+        cout << tab << inputType << " " << (i) << ";" << endl;
 
     cout << tab << "// Needed for calcTemp1" << endl;
-    for (lst::const_iterator i = l1.begin(); i != l1.end(); ++i)
-        cout << tab << "double " << (*i) << ";" << endl;
+    for (const auto & i : l1)
+        cout << tab << inputType << " " << (i) << ";" << endl;
 
     cout << tab << "// Needed for calcTemp2" << endl;
-    for (lst::const_iterator i = l2.begin(); i != l2.end(); ++i)
-        cout << tab << "double " << (*i) << ";" << endl;
+    for (const auto & i : l2)
+        cout << tab << inputType << " " << (i) << ";" << endl;
 
     cout << tab << "// Needed for result" << endl;
-    for (lst::const_iterator i = l3.begin(); i != l3.end(); ++i)
-        cout << tab << "double " << (*i) << ";" << endl;
+    for (const auto & i : l3)
+        cout << tab << inputType << " " << (i) << ";" << endl;
 
     cout << endl;
 
     cout << tab << "void calcTemp0 ()" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
-        cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
+    for (const auto & i : temp0)
+        cout << tab << tab << i.first.get_name() << " = " << csrc_long(i.second.eval()) << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << tab << "void copyTemp0 (AdecError& x)" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
-        cout << tab << tab << i->first.get_name() << " = x." << i->first.get_name() << ";" << endl;
+    for (const auto & i : l0)
+        cout << tab << tab << i << " = x." << i << ";" << endl;
+    for (const auto & i : temp0)
+        cout << tab << tab << i.first.get_name() << " = x." << i.first.get_name() << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << tab << "void calcTemp1 ()" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temp1.begin(); i != temp1.end(); ++i)
-        cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
+    for (const auto & i : temp1)
+        cout << tab << tab << i.first.get_name() << " = " << csrc_long(i.second.eval()) << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << tab << "void calcTemp2 ()" << endl;
     cout << tab << "{" << endl;
-    for (vec_iter i = temp2.begin(); i != temp2.end(); ++i)
-        cout << tab << tab << i->first.get_name() << " = " << i->second << ";" << endl;
+    for (const auto & i : temp2)
+        cout << tab << tab << i.first.get_name() << " = " << csrc_long(i.second.eval()) << ";" << endl;
     cout << tab << "}" << endl << endl;
 
-    cout << tab << "double calcResult ()" << endl;
+    cout << tab << "long calcResult ()" << endl;
     cout << tab << "{" << endl;
-    cout << tab << tab << "return " << part2 << ";" << endl;
+    cout << tab << tab << "return " << csrc_long(part2) << ";" << endl;
     cout << tab << "}" << endl << endl;
 
     cout << endl;
     cout << "private:" << endl;
+    const string tempType = "long";
+    for (const auto & i : temp0)
+        cout << tab << tempType << " " << i.first.get_name() << ";" << endl;
 
-    for (vec_iter i = temp0.begin(); i != temp0.end(); ++i)
-        cout << tab << "double " << i->first.get_name() << ";" << endl;
+    for (const auto & i : temp1)
+        cout << tab << tempType << " " << i.first.get_name() << ";" << endl;
 
-    for (vec_iter i = temp1.begin(); i != temp1.end(); ++i)
-        cout << tab << "double " << i->first.get_name() << ";" << endl;
-
-    for (vec_iter i = temp2.begin(); i != temp2.end(); ++i)
-        cout << tab << "double " << i->first.get_name() << ";" << endl;
+    for (const auto & i : temp2)
+        cout << tab << tempType << " " << i.first.get_name() << ";" << endl;
 
     cout << "};" << endl;
 
