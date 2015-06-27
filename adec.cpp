@@ -1,6 +1,5 @@
 #include <iostream>
-#include <cfloat>
-#include <cmath>
+#include <limits>
 #include <png++/png.hpp>
 #include <cln/integer.h>
 #include "AdecError.h"
@@ -9,7 +8,8 @@ using namespace png;
 using namespace std;
 using namespace cln;
 
-rgba_pixel clamp(image<rgba_pixel> im, int x, int y)
+// A pseudo wrap mode for textures packed with transparent margins.
+rgba_pixel packed(image<rgba_pixel> im, int x, int y)
 {
     if (x < 0 || y < 0 || x >= im.get_width() || y >= im.get_height())
         return rgba_pixel(0, 0, 0, 0);
@@ -17,49 +17,13 @@ rgba_pixel clamp(image<rgba_pixel> im, int x, int y)
         return im.get_pixel(x, y);
 }
 
+// Convert 16 bpp RGBA to 32 bpp. (PNG doesn't support 16 bpp!)
 rgba_pixel pixel16(int r4, int g4, int b4, int a4)
 {
     return rgba_pixel(r4 * 17, g4 * 17, b4 * 17, a4 * 17);
 }
 
-long climbHill(AdecError& e, int& f, int& b)
-{
-    const int NUM_STEP = 4;
-    int fStep[NUM_STEP] = {1, -1, 0, 0};
-    int bStep[NUM_STEP] = {0, 0, 1, -1};
-
-    e.C_f3 = f;
-    e.C_b3 = b;
-    int fBefore = f, bBefore = b;
-    long minError = e.calcResult();
-    while(true)
-    {
-        int fNext = f, bNext = b;
-        for (int i = 0; i < NUM_STEP; i++)
-        {
-            e.C_f3 = f + fStep[i];
-            e.C_b3 = b + bStep[i];
-            if (e.C_f3 >= 0 && e.C_b3 >= 0
-                && e.C_f3 < 16 && e.C_b3 < 16
-                && !(e.C_f3 == fBefore && e.C_b3 == bBefore))
-            {
-                long error = e.calcResult();
-                if (error < minError)
-                {
-                    minError = error;
-                    fNext = e.C_f3;
-                    bNext = e.C_b3;
-                }
-            }
-        }
-        if (fNext == f && bNext == b) return minError;
-        fBefore = f;
-        bBefore = b;
-        f = fNext;
-        b = bNext;
-    }
-}
-
+// Minimize error of the component.
 long bruteforce(AdecError& e, int& f, int& b)
 {
     long minError = LLONG_MAX;
@@ -77,34 +41,29 @@ long bruteforce(AdecError& e, int& f, int& b)
     return minError;
 }
 
-int main(int argc, char *argv[])
+// Alpha decomposition by analytical integration.
+void alphaDecompose(const image<rgba_pixel> & src, image<rgba_pixel> & front, image<rgba_pixel> & back)
 {
-    if (argc != 4) {
-        std::cerr << "usage: " << argv[0] << "[src.png] [front.png] [back.png]" << endl;
-        return EXIT_FAILURE;
-    }
-    try {
-        image<rgba_pixel> src(argv[1]);
-        size_t w = src.get_width();
-        size_t h = src.get_height();
-        image<rgba_pixel> front(w, h);
-        image<rgba_pixel> back(w, h);
-        AdecError aer, aeg, aeb;
+    size_t w = src.get_width();
+    size_t h = src.get_height();
+    AdecError aer, aeg, aeb;
+    for (size_t y = 0; y < h; ++y)
+    {
+        cerr << "\r" << w * y << "/" << w * h << flush;
         for (size_t x = 0; x < w; ++x)
-        for (size_t y = 0; y < h; ++y)
         {
-            rgba_pixel s0 = clamp(src, x - 1, y - 1);
-            rgba_pixel s1 = clamp(src, x, y - 1);
-            rgba_pixel s2 = clamp(src, x - 1, y);
-            rgba_pixel s3 = clamp(src, x, y);
+            rgba_pixel s0 = packed(src, x - 1, y - 1);
+            rgba_pixel s1 = packed(src, x, y - 1);
+            rgba_pixel s2 = packed(src, x - 1, y);
+            rgba_pixel s3 = packed(src, x, y);
 
-            rgba_pixel f0 = clamp(front, x - 1, y - 1);
-            rgba_pixel f1 = clamp(front, x, y - 1);
-            rgba_pixel f2 = clamp(front, x - 1, y);
+            rgba_pixel f0 = packed(front, x - 1, y - 1);
+            rgba_pixel f1 = packed(front, x, y - 1);
+            rgba_pixel f2 = packed(front, x - 1, y);
 
-            rgba_pixel b0 = clamp(back, x - 1, y - 1);
-            rgba_pixel b1 = clamp(back, x, y - 1);
-            rgba_pixel b2 = clamp(back, x - 1, y);
+            rgba_pixel b0 = packed(back, x - 1, y - 1);
+            rgba_pixel b1 = packed(back, x, y - 1);
+            rgba_pixel b2 = packed(back, x - 1, y);
 
             aer.A_s0 = s0.alpha;
             aer.A_s1 = s1.alpha;
@@ -156,7 +115,7 @@ int main(int argc, char *argv[])
             aeb.C_b2 = b2.blue >> 4;
             aeb.calcTemp1();
 
-            cl_I minError = cl_I(LLONG_MAX) * 3;
+            cl_I minError = cl_I(numeric_limits<long>::max()) * 3;
             int min_R_f3, min_R_b3;
             int min_G_f3, min_G_b3;
             int min_B_f3, min_B_b3;
@@ -176,17 +135,17 @@ int main(int argc, char *argv[])
                 aer.A_f3 = A_f3;
                 aer.A_b3 = A_b3;
                 aer.calcTemp2();
-                error += climbHill(aer, R_f3, R_b3);
+                error += bruteforce(aer, R_f3, R_b3);
 
                 aeg.A_f3 = A_f3;
                 aeg.A_b3 = A_b3;
                 aeg.calcTemp2();
-                error += climbHill(aeg, G_f3, G_b3);
+                error += bruteforce(aeg, G_f3, G_b3);
 
                 aeb.A_f3 = A_f3;
                 aeb.A_b3 = A_b3;
                 aeb.calcTemp2();
-                error += climbHill(aeb, B_f3, B_b3);
+                error += bruteforce(aeb, B_f3, B_b3);
 
                 if (error < minError)
                 {
@@ -204,11 +163,23 @@ int main(int argc, char *argv[])
             front.set_pixel(x, y, pixel16(min_R_f3, min_G_f3, min_B_f3, min_A_f3));
             back.set_pixel(x, y, pixel16(min_R_b3, min_G_b3, min_B_b3, min_A_b3));
         }
-        front.write(argv[2]);
-        back.write(argv[3]);
-    } catch (png::error& error) {
-        std::cerr << error.what() << "\n";
+    }
+    cerr << endl;
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4) {
+        cerr << "usage: " << argv[0] << "[src.png] [front.png] [back.png]" << endl;
         return EXIT_FAILURE;
     }
-    return 0;
+    image<rgba_pixel> src(argv[1]);
+    size_t w = src.get_width();
+    size_t h = src.get_height();
+    image<rgba_pixel> front(w, h);
+    image<rgba_pixel> back(w, h);
+    alphaDecompose(src, front, back);
+    front.write(argv[2]);
+    back.write(argv[3]);
+    return EXIT_SUCCESS;
 }
